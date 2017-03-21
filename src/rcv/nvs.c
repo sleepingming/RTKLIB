@@ -65,12 +65,13 @@ static int decode_xf5raw(raw_t *raw)
     gtime_t time;
     double tadj=0.0,toff=0.0,tn;
     int dTowInt;
-    double dTowUTC, dTowGPS, dTowFrac, L1, P1, D1;
+    double dTowUTC, dTowGPS, dTowFrac, Lb, Pb, Db;
     double gpsutcTimescale;
     unsigned char rcvTimeScaleCorr, sys, carrNo;
     int i,j,prn,sat,n=0,nsat,week;
     unsigned char *p=raw->buff+2;
     char *q,tstr[32],flag;
+    int bandnum = 0;
     
     trace(4,"decode_xf5raw: len=%d\n",raw->len);
     
@@ -125,7 +126,12 @@ static int decode_xf5raw(raw_t *raw)
     }
     for (i=0,p+=27;(i<nsat) && (n<MAXOBS); i++,p+=30) {
         raw->obs.data[n].time  = time;
-        sys = (U1(p)==1)?SYS_GLO:((U1(p)==2)?SYS_GPS:((U1(p)==4)?SYS_SBS:SYS_NONE));
+        sys = (U1(p)==1 || U1(p)==33)?SYS_GLO:((U1(p)==2)?SYS_GPS:((U1(p)==4)?SYS_SBS:SYS_NONE));
+        if (U1(p)==33) {
+            bandnum = 1; /* L2 */
+        } else
+            bandnum = 0;
+
         prn = U1(p+1);
         if (sys == SYS_SBS) prn += 120; /* Correct this */
         if (!(sat=satno(sys,prn))) {
@@ -133,29 +139,41 @@ static int decode_xf5raw(raw_t *raw)
             continue;
         }
         carrNo = I1(p+2);
-        L1 = R8(p+ 4);
-        P1 = R8(p+12);
-        D1 = R8(p+20);
+        Lb = R8(p+ 4);
+        Pb = R8(p+12);
+        Db = R8(p+20);
+
+        if (bandnum == 1){
+            if (n > 0) {
+                if (raw->obs.data[n-1].sat != sat || raw->obs.data[n-1].time.time != time.time || raw->obs.data[n-1].time.sec != time.sec)
+                    continue;
+                else
+                    n--;
+            }
+        }
         
         /* check range error */
-        if (L1<-1E10||L1>1E10||P1<-1E10||P1>1E10||D1<-1E5||D1>1E5) {
+        if (Lb<-1E10||Lb>1E10||Pb<-1E10||Pb>1E10||Db<-1E5||Db>1E5) {
             trace(2,"nvs xf5raw obs range error: sat=%2d L1=%12.5e P1=%12.5e D1=%12.5e\n",
-                  sat,L1,P1,D1);
+                  sat,Lb,Pb,Db);
             continue;
         }
-        raw->obs.data[n].SNR[0]=(unsigned char)(I1(p+3)*4.0+0.5);
+        raw->obs.data[n].SNR[bandnum]=(unsigned char)(I1(p+3)*4.0+0.5);
         if (sys==SYS_GLO) {
-            raw->obs.data[n].L[0]  =  L1 - toff*(FREQ1_GLO+DFRQ1_GLO*carrNo);
+            if (bandnum == 0)
+                raw->obs.data[n].L[0]  =  Lb - toff*(FREQ1_GLO+DFRQ1_GLO*carrNo);
+            else
+                raw->obs.data[n].L[1]  =  Lb - toff*(FREQ2_GLO+DFRQ2_GLO*carrNo);
         } else {
-            raw->obs.data[n].L[0]  =  L1 - toff*FREQ1;
+            raw->obs.data[n].L[0]  =  Lb - toff*FREQ1;
         }
-        raw->obs.data[n].P[0]    = (P1-dTowFrac)*CLIGHT*0.001 - toff*CLIGHT; /* in ms, needs to be converted */
-        raw->obs.data[n].D[0]    =  (float)D1;
+        raw->obs.data[n].P[bandnum]    = (Pb-dTowFrac)*CLIGHT*0.001 - toff*CLIGHT; /* in ms, needs to be converted */
+        raw->obs.data[n].D[bandnum]    =  (float)Db;
         
         /* set LLI if meas flag 4 (carrier phase present) off -> on */
         flag=U1(p+28);
-        raw->obs.data[n].LLI[0]=(flag&0x08)&&!(raw->halfc[sat-1][0]&0x08)?1:0;
-        raw->halfc[sat-1][0]=flag;
+        raw->obs.data[n].LLI[bandnum]=(flag&0x08)&&!(raw->halfc[sat-1][bandnum]&0x08)?1:0;
+        raw->halfc[sat-1][bandnum]=flag;
         
 #if 0
         if (raw->obs.data[n].SNR[0] > 160) {
@@ -164,15 +182,19 @@ static int decode_xf5raw(raw_t *raw)
                 n, (raw->obs.data[n].SNR[0])/4.0, U1(p+28) );
         }
 #endif
-        raw->obs.data[n].code[0] = CODE_L1C;
-        raw->obs.data[n].sat = sat;
-        
-        for (j=1;j<NFREQ+NEXOBS;j++) {
-            raw->obs.data[n].L[j]=raw->obs.data[n].P[j]=0.0;
-            raw->obs.data[n].D[j]=0.0;
-            raw->obs.data[n].SNR[j]=raw->obs.data[n].LLI[j]=0;
-            raw->obs.data[n].code[j]=CODE_NONE;
-        }
+        if (bandnum == 0) {
+            raw->obs.data[n].code[bandnum] = CODE_L1C;
+            raw->obs.data[n].sat = sat;
+        } else
+            raw->obs.data[n].code[bandnum] = CODE_L2C;
+
+        if (bandnum == 0)
+            for (j=1;j<NFREQ+NEXOBS;j++) {
+                raw->obs.data[n].L[j]=raw->obs.data[n].P[j]=0.0;
+                raw->obs.data[n].D[j]=0.0;
+                raw->obs.data[n].SNR[j]=raw->obs.data[n].LLI[j]=0;
+                raw->obs.data[n].code[j]=CODE_NONE;
+            }
         n++;
     }
     raw->time=time;
