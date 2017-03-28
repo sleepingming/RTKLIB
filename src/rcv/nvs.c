@@ -63,23 +63,27 @@ static int uraindex(double value)
 /* decode NVS xf5-raw: raw measurement data ----------------------------------*/
 static int decode_xf5raw(raw_t *raw)
 {
-    gtime_t time;
+	gtime_t time;
     double tadj=0.0,toff=0.0,tn;
     int dTowInt;
     double dTowUTC, dTowGPS, dTowFrac, Lb, Pb, Db;
     double gpsutcTimescale;
     unsigned char rcvTimeScaleCorr, sys, carrNo;
-    int i,j,prn,sat,n=0,nsat,week;
+	int i,j,prn,sat,n,nsgns,week;
+    int satPrev; unsigned char sysPrev;
     unsigned char *p=raw->buff+2;
-    char *q,tstr[32],flag;
-    int bandnum = 0;
-    
+	char *q,tstr[32],flag;
+	int bandnum = 0;
+	unsigned char sgnType;
+	unsigned char sgnCode;
+
     trace(4,"decode_xf5raw: len=%d\n",raw->len);
     
     /* time tag adjustment option (-TADJ) */
     if ((q=strstr(raw->opt,"-tadj"))) {
         sscanf(q,"-TADJ=%lf",&tadj);
-    }
+	}
+
     dTowUTC =R8(p);
     week = U2(p+8);
     gpsutcTimescale = R8(p+10);
@@ -99,7 +103,7 @@ static int decode_xf5raw(raw_t *raw)
         trace(2,"nvs xf5raw len=%d seems not be correct\n",raw->len);
         return -1;
     }
-    nsat = (raw->len - 31)/30;
+	nsgns = (raw->len - 31)/30;
     
     dTowGPS = dTowUTC + gpsutcTimescale;
     
@@ -111,95 +115,145 @@ static int decode_xf5raw(raw_t *raw)
     /* time tag adjustment */
     if (tadj>0.0) {
         tn=time2gpst(time,&week)/tadj;
-        toff=(tn-floor(tn+0.5))*tadj;
+		toff=(tn-floor(tn+0.5))*tadj;
         time=timeadd(time,-toff);
     }
     /* check time tag jump and output warning */
     if (raw->time.time&&fabs(timediff(time,raw->time))>86400.0) {
         time2str(time,tstr,3);
-        trace(2,"nvs xf5raw time tag jump warning: time=%s\n",tstr);
-    }
+		trace(2,"nvs xf5raw time tag jump warning: time=%s\n",tstr);
+	}
     if (fabs(timediff(time,raw->time))<=1e-3) {
         time2str(time,tstr,3);
         trace(2,"nvs xf5raw time tag duplicated: time=%s\n",tstr);
         return 0;
-    }
-    for (i=0,p+=27;(i<nsat) && (n<MAXOBS); i++,p+=30) {
-        raw->obs.data[n].time  = time;
-        sys = (U1(p)==1 || U1(p)==33)?SYS_GLO:((U1(p)==2)?SYS_GPS:((U1(p)==4)?SYS_SBS:SYS_NONE));
-        if (U1(p)==33) {
-            bandnum = 1; /* L2 */
-        } else
-            bandnum = 0;
+	}
 
-        prn = U1(p+1);
-        if (sys == SYS_SBS) prn += 120; /* Correct this */
-        if (!(sat=satno(sys,prn))) {
-            trace(2,"nvs xf5raw satellite number error: sys=%d prn=%d\n",sys,prn);
-            continue;
-        }
-        carrNo = I1(p+2);
-        Lb = R8(p+ 4);
-        Pb = R8(p+12);
-        Db = R8(p+20);
+    n = -1;
+	for (i=0,p+=27; (i<nsgns); i++,p+=30) {
 
-        if (bandnum == 1){
-            if (n > 0) {
-                if (raw->obs.data[n-1].sat != sat || raw->obs.data[n-1].time.time != time.time || raw->obs.data[n-1].time.sec != time.sec)
-                    continue;
-                else
-                    n--;
-            }
-        }
-        
-        /* check range error */
-        if (Lb<-1E10||Lb>1E10||Pb<-1E10||Pb>1E10||Db<-1E5||Db>1E5) {
-            trace(2,"nvs xf5raw obs range error: sat=%2d L1=%12.5e P1=%12.5e D1=%12.5e\n",
-                  sat,Lb,Pb,Db);
-            continue;
-        }
-        raw->obs.data[n].SNR[bandnum]=(unsigned char)(I1(p+3)*4.0+0.5);
-        if (sys==SYS_GLO) {
-            if (bandnum == 0)
-                raw->obs.data[n].L[0]  =  Lb - toff*(FREQ1_GLO+DFRQ1_GLO*carrNo);
-            else
-                raw->obs.data[n].L[1]  =  Lb - toff*(FREQ2_GLO+DFRQ2_GLO*carrNo);
-        } else {
-            raw->obs.data[n].L[0]  =  Lb - toff*FREQ1;
-        }
-        raw->obs.data[n].P[bandnum]    = (Pb-dTowFrac)*CLIGHT*0.001 - toff*CLIGHT; /* in ms, needs to be converted */
-        raw->obs.data[n].D[bandnum]    =  (float)Db;
-        
-        /* set LLI if meas flag 4 (carrier phase present) off -> on */
-        flag=U1(p+28);
-        raw->obs.data[n].LLI[bandnum]=(flag&0x08)&&!(raw->halfc[sat-1][bandnum]&0x08)?1:0;
-        raw->halfc[sat-1][bandnum]=flag;
-        
-#if 0
-        if (raw->obs.data[n].SNR[0] > 160) {
-            time2str(time,tstr,3);
-            trace(2,"%s, obs.data[%d]: SNR=%.3f  LLI=0x%02x\n",  tstr,
-                n, (raw->obs.data[n].SNR[0])/4.0, U1(p+28) );
-        }
-#endif
-        if (bandnum == 0) {
-            raw->obs.data[n].code[bandnum] = CODE_L1C;
-            raw->obs.data[n].sat = sat;
-        } else
-            raw->obs.data[n].code[bandnum] = CODE_L2C;
+		flag = U1(p+28);
 
-        if (bandnum == 0)
-            for (j=1;j<NFREQ+NEXOBS;j++) {
-                raw->obs.data[n].L[j]=raw->obs.data[n].P[j]=0.0;
-                raw->obs.data[n].D[j]=0.0;
-                raw->obs.data[n].SNR[j]=raw->obs.data[n].LLI[j]=0;
-                raw->obs.data[n].code[j]=CODE_NONE;
-            }
-        n++;
-    }
-    raw->time=time;
-    raw->obs.n=n;
-    return 1;
+		/* Do we have a full pseudorange? */
+		if (flag & 0x10 == 0x10) {
+
+			sgnType = U1(p);
+			switch ( sgnType ) {
+			 case 1: // GlnL1OF
+				 sys     = SYS_GLO;
+				 sgnCode = CODE_L1C;
+				 bandnum = 0;
+				 break;
+			 case 33: // GlnL2OF
+				 sys     = SYS_GLO;
+				 sgnCode = CODE_L2C;
+				 bandnum = 1;
+				 break;
+			 case 17: // GlnL1SF
+				 sys     = SYS_GLO;
+				 sgnCode = CODE_L1P;
+				 bandnum = 0;
+				 break;
+			 case 49: // GlnL2SF
+				 sys     = SYS_GLO;
+				 sgnCode = CODE_L2P;
+				 bandnum = 1;
+				 break;
+			 case 2:  // GpsL1CA
+				 sys     = SYS_GPS;
+				 sgnCode = CODE_L1C;
+				 bandnum = 0;
+				 break;
+			 case 4:   // SBAS
+				 sys     = SYS_SBS;
+				 sgnCode = CODE_L1C;
+				 bandnum = 0;
+				 break;
+			 default:
+				 sys     = SYS_NONE;
+				 sgnCode = CODE_NONE;
+				 bandnum = 0;
+				 continue;
+			}
+			prn = U1(p+1);
+
+			if (sys == SYS_SBS) prn += 120; /* Correct this */
+			if (!(sat=satno(sys,prn))) {
+				trace(2,"nvs xf5raw satellite number error: sys=%d prn=%d\n",sys,prn);
+				continue;
+			}
+
+			carrNo = I1(p+2);
+			Lb = R8(p+ 4);
+			Pb = R8(p+12);
+			Db = R8(p+20);
+			/* check range error */
+			if (Lb<-1E10||Lb>1E10||Pb<-1E10||Pb>1E10||Db<-1E5||Db>1E5) {
+				trace(2,"nvs xf5raw obs range error: sat=%2d L1=%12.5e P1=%12.5e D1=%12.5e\n",
+					sat,Lb,Pb,Db);
+				continue;
+			}
+
+			// Is it a new SV?
+			if ((sat != satPrev) || (n < 0) ) {
+				n++;
+				if ((n >= MAXOBS) || (n < 0)) {
+					n--;
+					break;
+				}
+				for (j=0; j<NFREQ+NEXOBS; j++) {
+					raw->obs.data[n].L[j]    = raw->obs.data[n].P[j]   = 0.0;
+					raw->obs.data[n].D[j]    = 0.0;
+					raw->obs.data[n].SNR[j]  = raw->obs.data[n].LLI[j] = 0;
+					raw->obs.data[n].code[j] = CODE_NONE;
+				}
+				raw->obs.data[n].sat = sat;
+			}
+			satPrev = sat;
+
+			if (n < 0) {
+			    break;
+			}
+
+			// Do we have good measurements already?
+			if ( ((raw->obs.data[n].code[bandnum] == CODE_L1P) && (bandnum == 0)) ||
+				 ((raw->obs.data[n].code[bandnum] == CODE_L2P) && (bandnum == 1))) {
+				 continue;
+			}
+
+			raw->obs.data[n].time  = time;
+
+			raw->obs.data[n].SNR[bandnum]=(unsigned char)(I1(p+3)*4.0+0.5);
+
+			if (sys==SYS_GLO) {
+				if (bandnum == 0)
+					raw->obs.data[n].L[0]  =  Lb - toff*(FREQ1_GLO+DFRQ1_GLO*carrNo);
+				else
+					raw->obs.data[n].L[1]  =  Lb - toff*(FREQ2_GLO+DFRQ2_GLO*carrNo);
+			} else {
+				raw->obs.data[n].L[0]      =  Lb - toff*FREQ1;
+			}
+			raw->obs.data[n].P[bandnum]    =  (Pb-dTowFrac)*CLIGHT*0.001 - toff*CLIGHT; /* in ms, needs to be converted */
+			raw->obs.data[n].D[bandnum]    =  (float)Db;
+
+			raw->obs.data[n].code[bandnum] = sgnCode;
+
+			raw->obs.data[n].LLI[bandnum]=(flag&0x08)&&!(raw->halfc[sat-1][bandnum]&0x08)?1:0;
+			raw->halfc[sat-1][bandnum]=flag;
+
+			#if 0
+			if (raw->obs.data[n].SNR[0] > 160) {
+				time2str(time,tstr,3);
+				trace(2,"%s, obs.data[%d]: SNR=%.3f  LLI=0x%02x\n",  tstr,
+					n, (raw->obs.data[n].SNR[0])/4.0, U1(p+28) );
+			}
+			#endif
+		}
+	}
+	raw->time = time;
+	raw->obs.n = n+1;
+
+	return 1;
 }
 /* decode ephemeris ----------------------------------------------------------*/
 static int decode_gpsephem(int sat, raw_t *raw)
@@ -364,7 +418,7 @@ static int decode_xe5bit(raw_t *raw)
     int prn;
     int iBlkStartIdx, iExpLen, iIdx;
     unsigned int words[10];
-    unsigned char uiDataBlocks, uiDataType;
+	unsigned char uiDataBlocks, uiDataType;
     unsigned char *p=raw->buff;
     
     trace(4,"decode_xe5bit: len=%d\n",raw->len);
@@ -452,7 +506,7 @@ static int decode_nvs(raw_t *raw)
     
     sprintf(raw->msgtype,"NVS: type=%2d len=%3d",type,raw->len);
     
-    switch (type) {
+	switch (type) {
         case ID_XF5RAW:  return decode_xf5raw (raw);
         case ID_XF7EPH:  return decode_xf7eph (raw);
         case ID_XE5BIT:  return decode_xe5bit (raw);
