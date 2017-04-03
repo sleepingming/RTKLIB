@@ -135,7 +135,7 @@ static int decode_xf5raw(raw_t *raw)
 		flag = U1(p+28);
 
 		/* Do we have a full pseudorange? */
-		if (flag & 0x10 == 0x10) {
+		if ( (flag & 0x10) == 0x10) {
 
 			sgnType = U1(p);
 			switch ( sgnType ) {
