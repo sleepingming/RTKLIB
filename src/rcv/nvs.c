@@ -230,6 +230,15 @@ static int decode_xf5raw(raw_t *raw)
 
 			raw->obs.data[n].SNR[bandnum]=(unsigned char)(I1(p+3)*4.0+0.5);
 
+			if (sys==SYS_GLO) {
+				if (bandnum == 0)
+					raw->obs.data[n].L[0]  =  Lb - toff*(FREQ1_GLO+DFRQ1_GLO*carrNo);
+				else
+					raw->obs.data[n].L[1]  =  Lb - toff*(FREQ2_GLO+DFRQ2_GLO*carrNo);
+			} else {
+				raw->obs.data[n].L[0]      =  Lb - toff*FREQ1;
+			}
+
 			if (sys==SYS_CMP) {
 				if (bandnum == 0) {
 					raw->obs.data[n].L[0]  =  Lb - toff*(FREQ1_CMP); }
