@@ -325,6 +325,62 @@ static int decode_gpsephem(int sat, raw_t *raw)
     raw->ephsat=sat;
     return 2;
 }
+/* decode cmpephem -----------------------------------------------------------*/
+static int decode_cmpephem(int sat, raw_t *raw)
+{
+	eph_t eph={0};
+    unsigned char *puiTmp = (raw->buff)+2;
+	unsigned short week;
+    double toc;
+
+    trace(4,"decode_ephem: sat=%2d\n",sat);
+
+    eph.crs    = R4(&puiTmp[  2]);
+    eph.deln   = R4(&puiTmp[  6]) * 1e+3;
+    eph.M0     = R8(&puiTmp[ 10]);
+    eph.cuc    = R4(&puiTmp[ 18]);
+    eph.e      = R8(&puiTmp[ 22]);
+    eph.cus    = R4(&puiTmp[ 30]);
+    eph.A      = pow(R8(&puiTmp[ 34]), 2);
+    eph.toes   = R8(&puiTmp[ 42]) * 1e-3;
+    eph.cic    = R4(&puiTmp[ 50]);
+    eph.OMG0   = R8(&puiTmp[ 54]);
+    eph.cis    = R4(&puiTmp[ 62]);
+    eph.i0     = R8(&puiTmp[ 66]);
+    eph.crc    = R4(&puiTmp[ 74]);
+    eph.omg    = R8(&puiTmp[ 78]);
+    eph.OMGd   = R8(&puiTmp[ 86]) * 1e+3;
+    eph.idot   = R8(&puiTmp[ 94]) * 1e+3;
+    eph.tgd[0] = R4(&puiTmp[102]) * 1e-3;
+    toc        = R8(&puiTmp[106]) * 1e-3;
+    eph.f2     = R4(&puiTmp[114]) * 1e+3;
+    eph.f1     = R4(&puiTmp[118]);
+    eph.f0     = R4(&puiTmp[122]) * 1e-3;
+    eph.sva    = uraindex(I2(&puiTmp[126]));
+    eph.iode   = I2(&puiTmp[128]);
+    eph.iodc   = I2(&puiTmp[130]);
+    eph.code   = I2(&puiTmp[132]);
+    eph.flag   = I2(&puiTmp[134]);
+    week       = I2(&puiTmp[136]);
+    eph.fit    = 0;
+
+    if (week>=4096) {
+		trace(2,"nvs beidou ephemeris week error: sat=%2d week=%d\n",sat,week);
+        return -1;
+    }
+	eph.week=adjgpsweek(week);
+    eph.toe=gpst2time(eph.week,eph.toes);
+    eph.toc=gpst2time(eph.week,toc);
+    eph.ttr=raw->time;
+
+    if (!strstr(raw->opt,"-EPHALL")) {
+        if (eph.iode==raw->nav.eph[sat-1].iode) return 0; /* unchanged */
+    }
+    eph.sat=sat;
+    raw->nav.eph[sat-1]=eph;
+    raw->ephsat=sat;
+    return 2;
+}
 /* adjust daily rollover of time ---------------------------------------------*/
 static gtime_t adjday(gtime_t time, double tod)
 {
@@ -424,6 +480,9 @@ static int decode_xf7eph(raw_t *raw)
 	else if (sys==SYS_GLO) {
 		return decode_gloephem(sat,raw);
 	}
+	else if (sys==SYS_CMP) {
+		return decode_cmpephem(sat,raw);
+    }
 	return 0;
 }
 /* decode NVS rxm-sfrb: subframe buffer --------------------------------------*/
