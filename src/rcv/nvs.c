@@ -468,7 +468,7 @@ static int decode_xf7eph(raw_t *raw)
         trace(2,"nvs xf7eph length error: len=%d\n",raw->len);
 		return -1;
 	}
-	sys = (U1(p+2)==1)?SYS_GPS:(U1(p+2)==2)?SYS_GLO:U1(p+2)==3?SYS_CMP:SYS_NONE;
+	sys = (U1(p+2)==1)?SYS_GPS:(U1(p+2)==2)?SYS_GLO:(U1(p+2)==3)?SYS_CMP:SYS_NONE;
 	prn = U1(p+3);
 	if (!(sat=satno(sys==1?SYS_GPS:SYS_GLO,prn))) {
 		trace(2,"nvs xf7eph satellite number error: prn=%d\n",prn);
