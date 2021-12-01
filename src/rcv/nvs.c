@@ -64,11 +64,11 @@ static int uraindex(double value)
 static int decode_xf5raw(raw_t *raw)
 {
 	gtime_t time;
-    double tadj=0.0,toff=0.0,tn;
-    int dTowInt;
-    double dTowUTC, dTowGPS, dTowFrac, Lb, Pb, Db;
-    double gpsutcTimescale;
-    unsigned char rcvTimeScaleCorr, sys, carrNo;
+	double tadj=0.0,toff=0.0,tn;
+	int dTowInt;
+	double dTowUTC, dTowGPS, dTowFrac, Lb, Pb, Db;
+	double gpsutcTimescale;
+	unsigned char rcvTimeScaleCorr, sys, carrNo;
 	int i,j,prn,sat,n,nsgns,week;
     int satPrev; unsigned char sysPrev;
     unsigned char *p=raw->buff+2;
@@ -86,12 +86,12 @@ static int decode_xf5raw(raw_t *raw)
 
     dTowUTC =R8(p);
     week = U2(p+8);
-    gpsutcTimescale = R8(p+10);
+	gpsutcTimescale = R8(p+10);
     /* glonassutcTimescale = R8(p+18); */
     rcvTimeScaleCorr = I1(p+26);
     
-    /* check gps week range */
-    if (week>=4096) {
+	/* check gps week range */
+	if (week>=4096) {
         trace(2,"nvs xf5raw obs week error: week=%d\n",week);
         return -1;
     }
@@ -116,10 +116,10 @@ static int decode_xf5raw(raw_t *raw)
     if (tadj>0.0) {
         tn=time2gpst(time,&week)/tadj;
 		toff=(tn-floor(tn+0.5))*tadj;
-        time=timeadd(time,-toff);
+		time=timeadd(time,-toff);
     }
-    /* check time tag jump and output warning */
-    if (raw->time.time&&fabs(timediff(time,raw->time))>86400.0) {
+	/* check time tag jump and output warning */
+	if (raw->time.time&&fabs(timediff(time,raw->time))>86400.0) {
         time2str(time,tstr,3);
 		trace(2,"nvs xf5raw time tag jump warning: time=%s\n",tstr);
 	}
@@ -167,6 +167,11 @@ static int decode_xf5raw(raw_t *raw)
 			 case 4:   // SBAS
 				 sys     = SYS_SBS;
 				 sgnCode = CODE_L1C;
+				 bandnum = 0;
+				 break;
+			 case 8:   // BeidouB1I
+				 sys     = SYS_CMP;
+				 sgnCode = CODE_L1I;
 				 bandnum = 0;
 				 break;
 			 default:
@@ -233,6 +238,12 @@ static int decode_xf5raw(raw_t *raw)
 			} else {
 				raw->obs.data[n].L[0]      =  Lb - toff*FREQ1;
 			}
+
+			if (sys==SYS_CMP) {
+				if (bandnum == 0) {
+					raw->obs.data[n].L[0]  =  Lb - toff*(FREQ1_CMP); }
+				}
+			}
 			raw->obs.data[n].P[bandnum]    =  (Pb-dTowFrac)*CLIGHT*0.001 - toff*CLIGHT; /* in ms, needs to be converted */
 			raw->obs.data[n].D[bandnum]    =  (float)Db;
 
@@ -248,6 +259,9 @@ static int decode_xf5raw(raw_t *raw)
 					n, (raw->obs.data[n].SNR[0])/4.0, U1(p+28) );
 			}
 			#endif
+			if (bandnum == 0) {
+			raw->obs.data[n].code[bandnum] = CODE_L1I;
+			raw->obs.data[n].sat = sat;
 		}
 	}
 	raw->time = time;
@@ -260,7 +274,7 @@ static int decode_gpsephem(int sat, raw_t *raw)
 {
     eph_t eph={0};
     unsigned char *puiTmp = (raw->buff)+2;
-    unsigned short week;
+	unsigned short week;
     double toc;
     
     trace(4,"decode_ephem: sat=%2d\n",sat);
@@ -311,6 +325,62 @@ static int decode_gpsephem(int sat, raw_t *raw)
     raw->ephsat=sat;
     return 2;
 }
+/* decode bdsephem -----------------------------------------------------------*/
+static int decode_cmpephem(int sat, raw_t *raw)
+{
+	eph_t eph={0};
+	unsigned char *puiTmp = (raw->buff)+2;
+	unsigned short week;
+	double toc;
+
+	trace(3,"decode_ephem: sat=%2d\n",sat);
+
+	eph.crs    = R4(&puiTmp[  2]);
+	eph.deln   = R4(&puiTmp[  6]) * 1e+3;
+	eph.M0     = R8(&puiTmp[ 10]);
+	eph.cuc    = R4(&puiTmp[ 18]);
+	eph.e      = R8(&puiTmp[ 22]);
+	eph.cus    = R4(&puiTmp[ 30]);
+	eph.A      = pow(R8(&puiTmp[ 34]), 2);
+	eph.toes   = R8(&puiTmp[ 42]) * 1e-3;
+	eph.cic    = R4(&puiTmp[ 50]);
+	eph.OMG0   = R8(&puiTmp[ 54]);
+	eph.cis    = R4(&puiTmp[ 62]);
+	eph.i0     = R8(&puiTmp[ 66]);
+	eph.crc    = R4(&puiTmp[ 74]);
+	eph.omg    = R8(&puiTmp[ 78]);
+	eph.OMGd   = R8(&puiTmp[ 86]) * 1e+3;
+	eph.idot   = R8(&puiTmp[ 94]) * 1e+3;
+	eph.tgd[0] = R4(&puiTmp[102]) * 1e-3;
+    toc        = R8(&puiTmp[106]) * 1e-3;
+	eph.f2     = R4(&puiTmp[114]) * 1e+3;
+	eph.f1     = R4(&puiTmp[118]);
+	eph.f0     = R4(&puiTmp[122]) * 1e-3;
+	eph.sva    = uraindex(I2(&puiTmp[126]));
+	eph.iode   = I2(&puiTmp[128]);
+	eph.iodc   = I2(&puiTmp[130]);
+	eph.code   = I2(&puiTmp[132]);
+	eph.flag   = I2(&puiTmp[134]);
+    week       = I2(&puiTmp[136]);
+	eph.fit    = 0;
+
+    if (week>=4096) {
+		trace(2,"nvs beidou ephemeris week error: sat=%2d week=%d\n",sat,week);
+		return -1;
+    }
+	eph.week=adjgpsweek(week);
+	eph.toe=bdt2time(eph.week,eph.toes);
+	eph.toc=bdt2time(eph.week,toc);
+	eph.ttr=raw->time;
+
+    if (!strstr(raw->opt,"-EPHALL")) {
+		if (eph.iode==raw->nav.eph[sat-1].iode) return 0;
+    }
+	eph.sat=sat;
+	raw->nav.eph[sat-1]=eph;
+	raw->ephsat=sat;
+    return 2;
+}
 /* adjust daily rollover of time ---------------------------------------------*/
 static gtime_t adjday(gtime_t time, double tod)
 {
@@ -326,9 +396,9 @@ static gtime_t adjday(gtime_t time, double tod)
 static int decode_gloephem(int sat, raw_t *raw)
 {
     geph_t geph={0};
-    unsigned char *p=(raw->buff)+2;
-    int prn,tk,tb;
-    
+	unsigned char *p=(raw->buff)+2;
+	int prn,tk,tb;
+
     if (raw->len>=93) {
         prn        =I1(p+ 1);
         geph.frq   =I1(p+ 2);
@@ -396,21 +466,24 @@ static int decode_xf7eph(raw_t *raw)
     
     if ((raw->len)<93) {
         trace(2,"nvs xf7eph length error: len=%d\n",raw->len);
-        return -1;
-    }
-    sys = (U1(p+2)==1)?SYS_GPS:((U1(p+2)==2)?SYS_GLO:SYS_NONE);
-    prn = U1(p+3);
-    if (!(sat=satno(sys==1?SYS_GPS:SYS_GLO,prn))) {
-        trace(2,"nvs xf7eph satellite number error: prn=%d\n",prn);
-        return -1;
-    }
-    if (sys==SYS_GPS) {
+		return -1;
+	}
+	sys = (U1(p+2)==1)?SYS_GPS:(U1(p+2)==2)?SYS_GLO:(U1(p+2)==3)?SYS_CMP:SYS_NONE;
+	prn = U1(p+3);
+	if (!(sat=satno(sys==1?SYS_GPS:SYS_GLO,prn))) {
+		trace(2,"nvs xf7eph satellite number error: prn=%d\n",prn);
+		return -1;
+	}
+	if (sys==SYS_GPS) {
         return decode_gpsephem(sat,raw);
+	}
+	else if (sys==SYS_GLO) {
+		return decode_gloephem(sat,raw);
+	}
+	else if (sys==SYS_CMP) {
+		return decode_cmpephem(sat,raw);
     }
-    else if (sys==SYS_GLO) {
-        return decode_gloephem(sat,raw);
-    }
-    return 0;
+	return 0;
 }
 /* decode NVS rxm-sfrb: subframe buffer --------------------------------------*/
 static int decode_xe5bit(raw_t *raw)
@@ -427,7 +500,7 @@ static int decode_xe5bit(raw_t *raw)
     uiDataBlocks = U1(p);
     
     if (uiDataBlocks>=16) {
-        trace(2,"nvs xf5bit message error: data blocks %u\n", uiDataBlocks);
+		trace(2,"nvs xf5bit message error: data blocks %u\n", uiDataBlocks);
         return -1;
     }
     iBlkStartIdx = 1;
@@ -458,7 +531,7 @@ static int decode_xe5bit(raw_t *raw)
                 words[7] >>= 6;
                 return sbsdecodemsg(raw->time,prn,words,&raw->sbsmsg) ? 3 : 0;
             default:
-                trace(2,"nvs xf5bit SNS type unknown (got %d)\n", uiDataType);
+				trace(2,"nvs xf5bit SNS type unknown (got %d)\n", uiDataType);
                 return -1;
         }
     }
@@ -473,7 +546,7 @@ static int decode_x4aiono(raw_t *raw)
     
     raw->nav.ion_gps[0] = R4(p   );
     raw->nav.ion_gps[1] = R4(p+ 4);
-    raw->nav.ion_gps[2] = R4(p+ 8);
+	raw->nav.ion_gps[2] = R4(p+ 8);
     raw->nav.ion_gps[3] = R4(p+12);
     raw->nav.ion_gps[4] = R4(p+16);
     raw->nav.ion_gps[5] = R4(p+20);
@@ -487,7 +560,7 @@ static int decode_x4btime(raw_t *raw)
 {
     unsigned char *p=raw->buff+2;
     
-    trace(4,"decode_x4btime: len=%d\n", raw->len);
+	trace(4,"decode_x4btime: len=%d\n", raw->len);
     
     raw->nav.utc_gps[1] = R8(p   );
     raw->nav.utc_gps[0] = R8(p+ 8);
@@ -533,11 +606,11 @@ static int decode_nvs(raw_t *raw)
 *-----------------------------------------------------------------------------*/
 extern int input_nvs(raw_t *raw, unsigned char data)
 {
-    trace(5,"input_nvs: data=%02x\n",data);
+	trace(5,"input_nvs: data=%02x\n",data);
     
     /* synchronize frame */
     if ((raw->nbyte==0) && (data==NVSSYNC)) {
-        
+
         /* Search a 0x10 */
         raw->buff[0] = data;
         raw->nbyte=1;
